@@ -134,6 +134,7 @@ _DEEPSEEK_CANONICAL_MODELS: frozenset[str] = frozenset({
     "deepseek-reasoner",   # R1-family reasoning model
     "deepseek-v4-pro",     # V4 Pro — first-class model ID
     "deepseek-v4-flash",   # V4 Flash — first-class model ID
+    "deepseek-flash",      # V4.1 Flash — live API id since ~2026-11 (/models: name "DeepSeek-V4.1-Flash"); not a deepseek-chat alias
 })
 
 # First-class V-series IDs (``deepseek-v4-pro``, ``deepseek-v4-flash``,
