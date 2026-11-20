@@ -57,7 +57,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     output_tokens INTEGER DEFAULT 0,
     cache_read_tokens INTEGER DEFAULT 0,
     cache_write_tokens INTEGER DEFAULT 0,
-    reasoning_tokens INTEGER DEFAULT 0,
+    reasoning_tokens INTEGER,  -- WS-0.2: NULL = no provider-reported breakdown; 0 = reported zero
     billing_provider TEXT,
     billing_base_url TEXT,
     billing_mode TEXT,
@@ -528,8 +528,8 @@ class SessionDB:
         def _do(conn):
             conn.execute(
                 """INSERT OR IGNORE INTO sessions (id, source, user_id, model, model_config,
-                   system_prompt, parent_session_id, started_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                   system_prompt, parent_session_id, started_at, reasoning_tokens)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)""",
                 (
                     session_id,
                     source,
@@ -591,7 +591,7 @@ class SessionDB:
         model: str = None,
         cache_read_tokens: int = 0,
         cache_write_tokens: int = 0,
-        reasoning_tokens: int = 0,
+        reasoning_tokens: Optional[int] = 0,
         estimated_cost_usd: Optional[float] = None,
         actual_cost_usd: Optional[float] = None,
         cost_status: Optional[str] = None,
@@ -623,7 +623,7 @@ class SessionDB:
                    output_tokens = ?,
                    cache_read_tokens = ?,
                    cache_write_tokens = ?,
-                   reasoning_tokens = ?,
+                   reasoning_tokens = CASE WHEN ? IS NULL THEN reasoning_tokens ELSE ? END,
                    estimated_cost_usd = COALESCE(?, 0),
                    actual_cost_usd = CASE
                        WHEN ? IS NULL THEN actual_cost_usd
@@ -644,7 +644,8 @@ class SessionDB:
                    output_tokens = output_tokens + ?,
                    cache_read_tokens = cache_read_tokens + ?,
                    cache_write_tokens = cache_write_tokens + ?,
-                   reasoning_tokens = reasoning_tokens + ?,
+                   reasoning_tokens = CASE WHEN ? IS NULL THEN reasoning_tokens
+                                           ELSE COALESCE(reasoning_tokens, 0) + ? END,
                    estimated_cost_usd = COALESCE(estimated_cost_usd, 0) + COALESCE(?, 0),
                    actual_cost_usd = CASE
                        WHEN ? IS NULL THEN actual_cost_usd
@@ -664,6 +665,7 @@ class SessionDB:
             output_tokens,
             cache_read_tokens,
             cache_write_tokens,
+            reasoning_tokens,
             reasoning_tokens,
             estimated_cost_usd,
             actual_cost_usd,

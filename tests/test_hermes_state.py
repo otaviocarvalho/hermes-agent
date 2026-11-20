@@ -137,6 +137,65 @@ class TestSessionLifecycle:
         assert child["parent_session_id"] == "parent"
 
 
+class TestReasoningTokenTristate:
+    """WS-0.2: reasoning_tokens is tri-state in the store.
+
+    NULL = no provider-reported breakdown yet; 0 = breakdown reported as
+    zero. A delta/absolute update carrying None must never poison the
+    column with NULL-arithmetic and never fabricate a 0.
+    """
+
+    def test_reasoning_tristate_new_session_row_is_null(self, db):
+        db.create_session(session_id="s1", source="cli")
+        assert db.get_session("s1")["reasoning_tokens"] is None
+
+    def test_reasoning_tristate_delta_none_never_poisons_null(self, db):
+        db.create_session(session_id="s1", source="cli")
+        db.update_token_counts("s1", input_tokens=100, output_tokens=50,
+                               reasoning_tokens=None, api_call_count=1)
+        assert db.get_session("s1")["reasoning_tokens"] is None
+
+    def test_reasoning_tristate_delta_seeds_on_first_report(self, db):
+        db.create_session(session_id="s1", source="cli")
+        db.update_token_counts("s1", input_tokens=100, output_tokens=50,
+                               reasoning_tokens=None, api_call_count=1)
+        db.update_token_counts("s1", input_tokens=100, output_tokens=50,
+                               reasoning_tokens=5, api_call_count=1)
+        assert db.get_session("s1")["reasoning_tokens"] == 5
+
+    def test_reasoning_tristate_delta_accumulates_after_seed(self, db):
+        db.create_session(session_id="s1", source="cli")
+        db.update_token_counts("s1", input_tokens=100, output_tokens=50,
+                               reasoning_tokens=5, api_call_count=1)
+        db.update_token_counts("s1", input_tokens=100, output_tokens=50,
+                               reasoning_tokens=7, api_call_count=1)
+        db.update_token_counts("s1", input_tokens=100, output_tokens=50,
+                               reasoning_tokens=None, api_call_count=1)
+        assert db.get_session("s1")["reasoning_tokens"] == 12
+
+    def test_reasoning_tristate_delta_reported_zero_stores_zero(self, db):
+        db.create_session(session_id="s1", source="cli")
+        db.update_token_counts("s1", input_tokens=100, output_tokens=50,
+                               reasoning_tokens=0, api_call_count=1)
+        assert db.get_session("s1")["reasoning_tokens"] == 0
+
+    def test_reasoning_tristate_absolute_none_keeps_prior(self, db):
+        db.create_session(session_id="s1", source="cli")
+        db.update_token_counts("s1", input_tokens=100, output_tokens=50,
+                               reasoning_tokens=9, api_call_count=1)
+        db.update_token_counts("s1", input_tokens=300, output_tokens=150,
+                               reasoning_tokens=None, api_call_count=5, absolute=True)
+        assert db.get_session("s1")["reasoning_tokens"] == 9
+
+    def test_reasoning_tristate_absolute_value_overwrites(self, db):
+        db.create_session(session_id="s1", source="cli")
+        db.update_token_counts("s1", input_tokens=100, output_tokens=50,
+                               reasoning_tokens=9, api_call_count=1)
+        db.update_token_counts("s1", input_tokens=300, output_tokens=150,
+                               reasoning_tokens=21, api_call_count=5, absolute=True)
+        assert db.get_session("s1")["reasoning_tokens"] == 21
+
+
 # =========================================================================
 # Message storage
 # =========================================================================

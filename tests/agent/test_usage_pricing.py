@@ -39,6 +39,38 @@ def test_normalize_usage_openai_subtracts_cached_prompt_tokens():
     assert normalized.output_tokens == 700
 
 
+def test_normalize_usage_chat_completions_reads_reasoning_tokens():
+    """z.ai/GLM and most OpenAI-compatible providers expose thinking tokens in
+    completion_tokens_details.reasoning_tokens on the chat-completions shape.
+    Before the fallback existed, normalize_usage only read the Responses-API
+    detail object (output_tokens_details), so reasoning_tokens was always 0
+    for these providers."""
+    usage = SimpleNamespace(
+        prompt_tokens=31,
+        completion_tokens=47,
+        prompt_tokens_details=SimpleNamespace(cached_tokens=0),
+        completion_tokens_details=SimpleNamespace(reasoning_tokens=43),
+    )
+
+    normalized = normalize_usage(usage, provider="openai", api_mode="chat_completions")
+
+    assert normalized.reasoning_tokens == 43
+
+
+def test_normalize_usage_responses_api_reasoning_still_takes_priority():
+    usage = SimpleNamespace(
+        input_tokens=100,
+        output_tokens=50,
+        input_tokens_details=SimpleNamespace(cached_tokens=0),
+        output_tokens_details=SimpleNamespace(reasoning_tokens=30),
+        completion_tokens_details=SimpleNamespace(reasoning_tokens=999),
+    )
+
+    normalized = normalize_usage(usage, provider="openai", api_mode="codex_responses")
+
+    assert normalized.reasoning_tokens == 30
+
+
 def test_normalize_usage_openai_reads_top_level_anthropic_cache_fields():
     """Some OpenAI-compatible proxies (OpenRouter, Vercel AI Gateway, Cline) expose
     Anthropic-style cache token counts at the top level of the usage object when
@@ -190,3 +222,52 @@ def test_custom_endpoint_models_api_pricing_is_supported(monkeypatch):
 
     assert float(entry.input_cost_per_million) == 0.5
     assert float(entry.output_cost_per_million) == 2.0
+
+
+# =========================================================================
+# WS-0.2: reasoning_tokens tri-state in normalize_usage
+# =========================================================================
+
+def test_normalize_usage_reasoning_tristate_reported_breakdown():
+    """A reported completion_tokens_details breakdown survives normalization
+    as the number itself (WS-0.2 AC 1: z.ai/GLM shape)."""
+    usage = SimpleNamespace(
+        prompt_tokens=3000,
+        completion_tokens=700,
+        prompt_tokens_details=SimpleNamespace(cached_tokens=0),
+        completion_tokens_details=SimpleNamespace(reasoning_tokens=42),
+    )
+
+    normalized = normalize_usage(usage, provider="openai", api_mode="chat_completions")
+
+    assert normalized.reasoning_tokens == 42
+
+
+def test_normalize_usage_reasoning_tristate_absent_breakdown_is_none():
+    """No breakdown object at all -> reasoning_tokens is None, never 0-faked
+    (WS-0.2 AC 3)."""
+    usage = SimpleNamespace(
+        prompt_tokens=3000,
+        completion_tokens=700,
+        prompt_tokens_details=SimpleNamespace(cached_tokens=0),
+    )
+
+    normalized = normalize_usage(usage, provider="openai", api_mode="chat_completions")
+
+    assert normalized.reasoning_tokens is None
+
+
+def test_normalize_usage_reasoning_tristate_reported_zero_stays_zero():
+    """A breakdown object reporting 0 means reported-zero — a different fact
+    from absent — and must stay the int 0, not None (WS-0.2 AC 3)."""
+    usage = SimpleNamespace(
+        prompt_tokens=3000,
+        completion_tokens=700,
+        prompt_tokens_details=SimpleNamespace(cached_tokens=0),
+        completion_tokens_details=SimpleNamespace(reasoning_tokens=0),
+    )
+
+    normalized = normalize_usage(usage, provider="openai", api_mode="chat_completions")
+
+    assert normalized.reasoning_tokens == 0
+    assert normalized.reasoning_tokens is not None

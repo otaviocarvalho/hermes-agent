@@ -32,7 +32,7 @@ class CanonicalUsage:
     output_tokens: int = 0
     cache_read_tokens: int = 0
     cache_write_tokens: int = 0
-    reasoning_tokens: int = 0
+    reasoning_tokens: Optional[int] = 0  # WS-0.2: None = provider sent no breakdown
     request_count: int = 1
     raw_usage: Optional[dict[str, Any]] = None
 
@@ -717,10 +717,22 @@ def normalize_usage(
             )
         input_tokens = max(0, prompt_total - cache_read_tokens - cache_write_tokens)
 
-    reasoning_tokens = 0
+    # WS-0.2 tri-state: None = the provider sent no reasoning breakdown at
+    # all; an int (including 0) = the breakdown was present. The absent case
+    # must not be 0-faked - the ledger records NULL for it.
+    reasoning_tokens = None
     output_details = getattr(response_usage, "output_tokens_details", None)
-    if output_details:
+    if output_details is not None:
         reasoning_tokens = _to_int(getattr(output_details, "reasoning_tokens", 0))
+    if not reasoning_tokens:
+        # OpenAI Chat Completions shape: reasoning lives in
+        # completion_tokens_details.reasoning_tokens (z.ai/GLM and most
+        # OpenAI-compatible providers expose thinking here). The Responses-API
+        # detail object above (output_tokens_details) does not exist on this
+        # mode, so without this fallback reasoning_tokens is always 0.
+        completion_details = getattr(response_usage, "completion_tokens_details", None)
+        if completion_details is not None:
+            reasoning_tokens = _to_int(getattr(completion_details, "reasoning_tokens", 0))
 
     return CanonicalUsage(
         input_tokens=input_tokens,

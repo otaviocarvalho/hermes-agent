@@ -12103,7 +12103,7 @@ class AIAgent:
                         self.session_output_tokens += canonical_usage.output_tokens
                         self.session_cache_read_tokens += canonical_usage.cache_read_tokens
                         self.session_cache_write_tokens += canonical_usage.cache_write_tokens
-                        self.session_reasoning_tokens += canonical_usage.reasoning_tokens
+                        self.session_reasoning_tokens += canonical_usage.reasoning_tokens or 0
 
                         # Log API call details for debugging/observability
                         _cache_pct = ""
