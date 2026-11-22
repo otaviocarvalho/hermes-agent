@@ -88,6 +88,24 @@ class _OpenAIProxy:
     __slots__ = ()
 
     def __call__(self, *args, **kwargs):
+        # WS-2.3 (ADR-0006): constructions that bypass AIAgent (aux
+        # title-gen and other proxy clients) still tag their client when
+        # the current conversation published a header value on the
+        # request ContextVar. Never overwrites an explicit X-Session-Id;
+        # unset → construct unchanged.
+        try:
+            from agent.session_identity import (
+                get_session_header_value,
+                merge_session_header,
+            )
+
+            value = get_session_header_value()
+            if value:
+                kwargs["default_headers"] = merge_session_header(
+                    kwargs.get("default_headers"), value
+                )
+        except Exception:  # header must never break client creation
+            pass
         return _load_openai_cls()(*args, **kwargs)
 
     def __instancecheck__(self, obj):

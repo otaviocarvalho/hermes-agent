@@ -1,5 +1,6 @@
 """Tests for hermes_state.py — SessionDB SQLite CRUD, FTS5 search, export."""
 
+import re
 import time
 import pytest
 from pathlib import Path
@@ -2966,6 +2967,73 @@ class TestFTS5ToolCallMigration:
             ).fetchone()
             version = row["version"] if hasattr(row, "keys") else row[0]
             assert version == 11
+        finally:
+            session_db.close()
+
+
+# =========================================================================
+# WS-2.3 (ADR-0006): x_session_id capture + legacy reconciliation
+# =========================================================================
+
+class TestXSessionId:
+    def test_x_session_id_append_and_read_back(self, db):
+        """C7: append_message stores the opaque header value on the row and
+        get_messages returns it (SELECT * passes the column through)."""
+        db.create_session(session_id="s1", source="cli", model="m")
+        db.append_message(
+            session_id="s1",
+            role="assistant",
+            content="hello",
+            x_session_id="s-0123456789abcdef",
+        )
+        rows = db.get_messages("s1")
+        assert len(rows) == 1
+        assert rows[0]["x_session_id"] == "s-0123456789abcdef"
+
+    def test_x_session_id_null_without_header(self, db):
+        """Writers that do not know the header (legacy callers) leave the
+        column NULL — the metrics window simply excludes the row."""
+        db.create_session(session_id="s1", source="cli", model="m")
+        db.append_message(session_id="s1", role="assistant", content="legacy")
+        row = db.get_messages("s1")[0]
+        assert row["x_session_id"] is None
+
+    def test_x_session_id_legacy_db_reconciled_at_open(self, tmp_path):
+        """C7 failure-mode direction: a pre-WS-2.3 database (messages table
+        without the column) gains x_session_id via the declarative
+        reconciliation at open-time, and appends with the header work."""
+        import sqlite3
+
+        from hermes_state import SCHEMA_SQL
+
+        db_path = tmp_path / "legacy_state.db"
+        # Faithful pre-WS-2.3 shape: the real schema minus the new column.
+        # Line-filter leaves a dangling comma before the closing paren —
+        # valid SQL never has ",)" so stripping that is safe. Comment lines
+        # are dropped first (no-ops for schema shape).
+        lines = [
+            ln for ln in SCHEMA_SQL.splitlines()
+            if "x_session_id" not in ln and not ln.strip().startswith("--")
+        ]
+        legacy_schema = re.sub(r",(\s*\n\s*\))", r"\1", "\n".join(lines))
+        conn = sqlite3.connect(db_path)
+        conn.executescript(legacy_schema)
+        conn.commit()
+        conn.close()
+
+        session_db = SessionDB(db_path=db_path)
+        try:
+            live_cols = {
+                r[1] for r in session_db._conn.execute("PRAGMA table_info(messages)").fetchall()
+            }
+            assert "x_session_id" in live_cols
+
+            session_db.create_session(session_id="s1", source="cli", model="m")
+            session_db.append_message(
+                session_id="s1", role="assistant", content="post-migrate",
+                x_session_id="s-abc",
+            )
+            assert session_db.get_messages("s1")[0]["x_session_id"] == "s-abc"
         finally:
             session_db.close()
 

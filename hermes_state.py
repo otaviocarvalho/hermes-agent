@@ -86,7 +86,13 @@ CREATE TABLE IF NOT EXISTS messages (
     reasoning_content TEXT,
     reasoning_details TEXT,
     codex_reasoning_items TEXT,
-    codex_message_items TEXT
+    codex_message_items TEXT,
+    -- WS-2.3 (ADR-0006): opaque X-Session-Id value sent on the provider
+    -- call that produced this assistant row. Nullable: pre-rollout rows
+    -- and non-agent writers stay NULL and are excluded by metrics
+    -- windows (no backfill). Declarative reconciliation at open-time
+    -- adds the column to existing DBs.
+    x_session_id TEXT
 );
 
 CREATE TABLE IF NOT EXISTS state_meta (
@@ -1280,6 +1286,7 @@ class SessionDB:
         reasoning_details: Any = None,
         codex_reasoning_items: Any = None,
         codex_message_items: Any = None,
+        x_session_id: str = None,
     ) -> int:
         """
         Append a message to a session. Returns the message row ID.
@@ -1315,8 +1322,8 @@ class SessionDB:
                 """INSERT INTO messages (session_id, role, content, tool_call_id,
                    tool_calls, tool_name, timestamp, token_count, finish_reason,
                    reasoning, reasoning_content, reasoning_details, codex_reasoning_items,
-                   codex_message_items)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   codex_message_items, x_session_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     session_id,
                     role,
@@ -1332,6 +1339,7 @@ class SessionDB:
                     reasoning_details_json,
                     codex_items_json,
                     codex_message_items_json,
+                    x_session_id,
                 ),
             )
             msg_id = cursor.lastrowid

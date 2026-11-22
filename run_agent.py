@@ -1671,7 +1671,37 @@ class AIAgent:
             timestamp_str = self.session_start.strftime("%Y%m%d_%H%M%S")
             short_uuid = uuid.uuid4().hex[:6]
             self.session_id = f"{timestamp_str}_{short_uuid}"
-        
+
+        # WS-2.3 (ADR-0006): stable, opaque X-Session-Id for every
+        # OpenAI-compatible provider call. Identity = gateway topic key
+        # when present (stable across context resets), else the CLI
+        # session id. Absence of the header must never break a call —
+        # _create_openai_client simply skips the merge when unset.
+        try:
+            from agent.session_identity import (
+                get_session_header_value,
+                session_header_value,
+                set_session_header_value,
+            )
+
+            self._session_identity_key = self._gateway_session_key or self.session_id
+            self._session_header = session_header_value(self._session_identity_key)
+            if not self._gateway_session_key:
+                # Aux/utility agents constructed inside a conversation task
+                # inherit the task's topic header instead of regenerating a
+                # per-instance value — republishing the same value keeps the
+                # task ContextVar stable for later proxy constructions
+                # (plan assumption: aux inherits the topic header; standalone
+                # constructions see an unset context and keep session_id).
+                inherited = get_session_header_value()
+                if inherited:
+                    self._session_header = inherited
+            if self._session_header:
+                set_session_header_value(self._session_header)
+        except Exception:  # identity must never break construction
+            self._session_identity_key = None
+            self._session_header = None
+
         # Session logs go into ~/.hermes/sessions/ alongside gateway sessions
         hermes_home = get_hermes_home()
         self.logs_dir = hermes_home / "sessions"
@@ -4033,6 +4063,7 @@ class AIAgent:
                     tool_calls=tool_calls_data,
                     tool_call_id=msg.get("tool_call_id"),
                     finish_reason=msg.get("finish_reason"),
+                    x_session_id=getattr(self, "_session_header", None),
                     reasoning=msg.get("reasoning") if role == "assistant" else None,
                     reasoning_content=msg.get("reasoning_content") if role == "assistant" else None,
                     reasoning_details=msg.get("reasoning_details") if role == "assistant" else None,
@@ -5779,6 +5810,20 @@ class AIAgent:
         # copy locks the contract so future transport/keepalive work can't reintroduce
         # the same class of bug.
         client_kwargs = dict(client_kwargs)
+        # WS-2.3 (ADR-0006): tag this client with the conversation's
+        # opaque X-Session-Id. Merged into the per-call copy only —
+        # never back into self._client_kwargs (same contract as the
+        # keepalive injection below). Explicit headers win; unset
+        # identity → no header, call proceeds unchanged.
+        if getattr(self, "_session_header", None):
+            try:
+                from agent.session_identity import merge_session_header
+
+                client_kwargs["default_headers"] = merge_session_header(
+                    client_kwargs.get("default_headers"), self._session_header
+                )
+            except Exception:  # header must never break client creation
+                pass
         _validate_proxy_env_urls()
         _validate_base_url(client_kwargs.get("base_url"))
         if self.provider == "copilot-acp" or str(client_kwargs.get("base_url", "")).startswith("acp://copilot"):

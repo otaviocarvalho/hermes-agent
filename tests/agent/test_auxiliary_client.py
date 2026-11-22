@@ -2164,3 +2164,76 @@ class TestAnthropicExplicitApiKey:
         assert mock_build.call_args.args[0] == "explicit-fallback-key", (
             "resolve_provider_client must forward explicit_api_key to _try_anthropic()"
         )
+
+
+# =========================================================================
+# WS-2.3 (ADR-0006): proxy clients carry the conversation's X-Session-Id
+# =========================================================================
+
+class _SessionHeaderFakeOpenAI:
+    """Records construction kwargs without touching the network."""
+
+    instances = []
+
+    def __init__(self, **kwargs):
+        self._kwargs = kwargs
+        _SessionHeaderFakeOpenAI.instances.append(self)
+
+
+@pytest.fixture()
+def _fake_openai_cls(monkeypatch):
+    import agent.auxiliary_client as aux_mod
+
+    _SessionHeaderFakeOpenAI.instances = []
+    monkeypatch.setattr(aux_mod, "_load_openai_cls", lambda: _SessionHeaderFakeOpenAI)
+    return _SessionHeaderFakeOpenAI
+
+
+def test_session_header_proxy_injects_when_context_set(_fake_openai_cls):
+    """C6: with the request ContextVar set, proxy-constructed clients carry
+    X-Session-Id even though they bypass AIAgent entirely."""
+    from agent.session_identity import SESSION_HEADER_NAME, set_session_header_value
+
+    import agent.auxiliary_client as aux_mod
+
+    set_session_header_value("s-feedfacefeedface")
+    try:
+        aux_mod.OpenAI(api_key="k", base_url="https://example.invalid/v1")
+    finally:
+        from agent.session_identity import clear_session_header_value
+        clear_session_header_value()
+
+    kwargs = _SessionHeaderFakeOpenAI.instances[-1]._kwargs
+    assert kwargs["default_headers"][SESSION_HEADER_NAME] == "s-feedfacefeedface"
+
+
+def test_session_header_proxy_explicit_wins(_fake_openai_cls):
+    from agent.session_identity import SESSION_HEADER_NAME, set_session_header_value
+
+    import agent.auxiliary_client as aux_mod
+
+    set_session_header_value("s-contextvalue0000")
+    try:
+        aux_mod.OpenAI(
+            api_key="k",
+            default_headers={SESSION_HEADER_NAME: "caller-explicit"},
+        )
+    finally:
+        from agent.session_identity import clear_session_header_value
+        clear_session_header_value()
+
+    kwargs = _SessionHeaderFakeOpenAI.instances[-1]._kwargs
+    assert kwargs["default_headers"][SESSION_HEADER_NAME] == "caller-explicit"
+
+
+def test_session_header_proxy_unset_leaves_construction_alone(_fake_openai_cls):
+    """C3 direction at the proxy: unset context → no header injected,
+    construction kwargs unchanged (AC4 graceful)."""
+    from agent.session_identity import SESSION_HEADER_NAME, get_session_header_value
+
+    import agent.auxiliary_client as aux_mod
+
+    assert get_session_header_value() is None
+    aux_mod.OpenAI(api_key="k", base_url="https://example.invalid/v1")
+    kwargs = _SessionHeaderFakeOpenAI.instances[-1]._kwargs
+    assert SESSION_HEADER_NAME not in kwargs.get("default_headers", {})

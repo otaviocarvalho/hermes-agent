@@ -9368,6 +9368,7 @@ class GatewayRunner:
                     provider_require_parameters=pr.get("require_parameters", False),
                     provider_data_collection=pr.get("data_collection"),
                     session_id=task_id,
+                    gateway_session_key=self._session_key_for_source(source),
                     platform=platform_key,
                     user_id=source.user_id,
                     user_name=source.user_name,
